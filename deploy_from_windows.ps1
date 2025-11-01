@@ -80,5 +80,6 @@ Write-Host ""
 # Open browser
 Write-Host "Opening application in browser..." -ForegroundColor Yellow
 Start-Sleep -Seconds 3
-Start-Process "http://$ServerIP"
+$url = "http://$ServerIP"
+Start-Process $url
 

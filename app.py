@@ -11,7 +11,6 @@ import json
 import requests
 import base64
 import time
-import sqlite3
 from datetime import datetime
 from dotenv import load_dotenv
 from pathlib import Path
@@ -32,9 +31,6 @@ CORS(app)
 # Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 REPLICATE_API_TOKEN = os.getenv('REPLICATE_API_TOKEN')
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
-DB_PATH = 'fragrantica_news.db'
 
 if OPENAI_API_KEY:
     masked_key = OPENAI_API_KEY[:10] + '...' + OPENAI_API_KEY[-4:] if len(OPENAI_API_KEY) > 14 else '[SET]'
@@ -48,18 +44,7 @@ if REPLICATE_API_TOKEN:
 else:
     print(f"[INIT] WARNING: REPLICATE_API_TOKEN not found in .env!")
 
-if TELEGRAM_BOT_TOKEN:
-    masked_token = TELEGRAM_BOT_TOKEN[:10] + '...' + TELEGRAM_BOT_TOKEN[-4:] if len(TELEGRAM_BOT_TOKEN) > 14 else '[SET]'
-    print(f"[INIT] Telegram Bot Token loaded: {masked_token}")
-else:
-    print(f"[INIT] WARNING: TELEGRAM_BOT_TOKEN not found in .env (required for publishing)")
-
-if TELEGRAM_CHANNEL_ID:
-    print(f"[INIT] Telegram Channel ID loaded: {TELEGRAM_CHANNEL_ID}")
-else:
-    print(f"[INIT] WARNING: TELEGRAM_CHANNEL_ID not found in .env (required for publishing)")
-
-UPLOAD_FOLDER = 'main_images'
+UPLOAD_FOLDER = 'generated_images'
 VIDEO_FOLDER = 'generated_videos'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'mp4'}
 
@@ -83,81 +68,6 @@ def save_history(entry):
     history.append(entry)
     with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
-
-# ============================================================================
-# DATABASE HELPERS (Randewoo Products)
-# ============================================================================
-
-def get_db_connection():
-    """Creates connection to database"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def get_all_products():
-    """Get all Randewoo products from database"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, brand, name, product_url, fragrantica_url, parsed_at, 
-                   description, image_path, styled_image_path, video_path
-            FROM randewoo_products
-            ORDER BY id DESC
-            LIMIT 1000
-        ''')
-        
-        products = []
-        for row in cursor.fetchall():
-            products.append({
-                'id': row['id'],
-                'brand': row['brand'],
-                'name': row['name'],
-                'product_url': row['product_url'],
-                'fragrantica_url': row['fragrantica_url'] if row['fragrantica_url'] else '',
-                'description': row['description'] if row['description'] else '',
-                'image_path': row['image_path'] if row['image_path'] else '',
-                'styled_image_path': row['styled_image_path'] if row['styled_image_path'] else '',
-                'video_path': row['video_path'] if row['video_path'] else '',
-                'parsed_at': row['parsed_at']
-            })
-        
-        conn.close()
-        return products
-        
-    except Exception as e:
-        print(f"[DB ERROR] Failed to get products: {e}")
-        return []
-
-def get_product_by_id(product_id):
-    """Get single product by ID"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, brand, name, product_url, fragrantica_url
-            FROM randewoo_products
-            WHERE id = ?
-        ''', (product_id,))
-        
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            return {
-                'id': row['id'],
-                'brand': row['brand'],
-                'name': row['name'],
-                'product_url': row['product_url'],
-                'fragrantica_url': row['fragrantica_url'] if row['fragrantica_url'] else ''
-            }
-        return None
-        
-    except Exception as e:
-        print(f"[DB ERROR] Failed to get product {product_id}: {e}")
-        return None
 
 def search_perfume_image(brand, perfume_name):
     """
@@ -187,7 +97,7 @@ def download_image(url, filename):
             with open(filepath, 'wb') as f:
                 f.write(response.content)
             
-            print(f"[DOWNLOAD] Image downloaded successfully: {len(response.content)} bytes")
+            print(f"[DOWNLOAD] ✓ Image downloaded successfully: {len(response.content)} bytes")
             return filepath
             
         except requests.exceptions.Timeout:
@@ -303,7 +213,7 @@ def remove_background_replicate(image_path):
                 with open(abs_output, 'wb') as out:
                     out.write(result_response.content)
                 
-                print(f"[NANO-BANANA] Background removed successfully!")
+                print(f"[NANO-BANANA] ✓ Background removed successfully!")
                 return output_path
             
             elif status == 'failed':
@@ -315,6 +225,103 @@ def remove_background_replicate(image_path):
             
     except Exception as e:
         print(f"[NANO-BANANA ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+        return image_path
+
+def remove_background_openai(image_path, custom_prompt=None):
+    """Remove background using OpenAI GPT Image API via direct HTTP call"""
+    if not OPENAI_API_KEY:
+        raise ValueError("OpenAI API key not configured")
+    
+    try:
+        from PIL import Image
+        import io
+        
+        print(f"[OpenAI] Starting background removal for: {image_path}")
+        
+        # Get absolute path
+        abs_path = os.path.abspath(image_path)
+        output_path = image_path.replace('.jpg', '_nobg.png').replace('.jpeg', '_nobg.png')
+        abs_output = os.path.abspath(output_path)
+        
+        print(f"[OpenAI] Input: {abs_path}")
+        print(f"[OpenAI] Output: {abs_output}")
+        
+        # Convert to PNG with RGBA (OpenAI requires RGBA format!)
+        img = Image.open(abs_path)
+        
+        # Convert to RGBA (add alpha channel)
+        if img.mode != 'RGBA':
+            print(f"[OpenAI] Converting from {img.mode} to RGBA")
+            img = img.convert('RGBA')
+        
+        # Resize if too large (max 4MB)
+        if img.width > 1024 or img.height > 1024:
+            print(f"[OpenAI] Resizing from {img.width}x{img.height} to fit 1024x1024")
+            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        
+        # Convert to PNG in memory
+        png_buffer = io.BytesIO()
+        img.save(png_buffer, format='PNG')
+        png_buffer.seek(0)
+        png_data = png_buffer.read()
+        
+        print(f"[OpenAI] Converted to PNG RGBA: {len(png_data)} bytes ({len(png_data)/1024/1024:.2f} MB)")
+        
+        # Use custom prompt or default
+        if custom_prompt:
+            prompt = custom_prompt
+            print(f"[OpenAI] Using CUSTOM prompt: {prompt[:80]}...")
+        else:
+            prompt = """Remove the background completely, leaving only the perfume bottle. 
+        Make the background pure white or transparent. 
+        Keep the perfume bottle sharp, detailed, and centered. 
+        Preserve all text and labels on the bottle clearly."""
+            print(f"[OpenAI] Using DEFAULT prompt")
+        
+        # Create multipart form data
+        png_buffer.seek(0)
+        files = {
+            'image': ('image.png', png_buffer, 'image/png'),
+            'model': (None, 'dall-e-2'),
+            'prompt': (None, prompt),
+            'n': (None, '1'),
+            'size': (None, '1024x1024')
+        }
+        
+        headers = {
+            'Authorization': f'Bearer {OPENAI_API_KEY}'
+        }
+        
+        # Call OpenAI API
+        url = "https://api.openai.com/v1/images/edits"
+        print(f"[OpenAI] Calling API...")
+        
+        response = requests.post(url, headers=headers, files=files, timeout=120)
+        
+        print(f"[OpenAI] Response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            if 'data' in result and len(result['data']) > 0:
+                image_url = result['data'][0].get('url')
+                if image_url:
+                    print(f"[OpenAI] Downloading result from: {image_url[:50]}...")
+                    img_response = requests.get(image_url, timeout=30)
+                    
+                    with open(abs_output, 'wb') as f:
+                        f.write(img_response.content)
+                    
+                    print(f"[OpenAI] ✓ Background removed successfully!")
+                    return output_path
+        
+        print(f"[OpenAI] API error: {response.text[:300]}")
+        return image_path
+        
+    except Exception as e:
+        print(f"[OpenAI ERROR] Background removal failed: {e}")
         import traceback
         traceback.print_exc()
         return image_path
@@ -424,7 +431,7 @@ IMPORTANT: Do NOT change the perfume bottle itself - keep it identical to the in
                 result_response = requests.get(output_url, timeout=60)
                 generated_img = Image.open(io.BytesIO(result_response.content))
                 
-                print(f"[NANO-BANANA] Image stylized successfully!")
+                print(f"[NANO-BANANA] ✓ Image stylized successfully!")
                 return generated_img
             
             elif status == 'failed':
@@ -440,6 +447,215 @@ IMPORTANT: Do NOT change the perfume bottle itself - keep it identical to the in
         traceback.print_exc()
         return None
 
+def create_styled_background_dalle3(description, custom_prompt=None):
+    """Create styled background using DALL-E 3"""
+    if not OPENAI_API_KEY:
+        raise ValueError("OpenAI API key not configured")
+    
+    try:
+        print(f"[DALL-E 3] Creating styled background...")
+        
+        # Generate background prompt
+        if custom_prompt:
+            bg_prompt = custom_prompt.replace('{DESCRIPTION}', description[:400])
+            print(f"[DALL-E 3] Using CUSTOM prompt")
+        else:
+            bg_prompt = f"""Create a beautiful, elegant abstract background for a perfume advertisement.
+The mood and atmosphere should match this perfume: {description[:400]}
+
+Style: Professional commercial photography background, sophisticated, atmospheric.
+No text, no bottles, no products - only the background scenery.
+High-end luxury advertising aesthetic. Blurred bokeh lights, soft focus, cinematic lighting.
+1024x1024 square format."""
+            print(f"[DALL-E 3] Using DEFAULT prompt")
+        
+        print(f"[DALL-E 3] Prompt preview: {bg_prompt[:120]}...")
+        
+        # Call DALL-E 3 API
+        url = "https://api.openai.com/v1/images/generations"
+        headers = {
+            'Authorization': f'Bearer {OPENAI_API_KEY}',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            "model": "dall-e-3",
+            "prompt": bg_prompt,
+            "n": 1,
+            "size": "1024x1024",
+            "quality": "standard"
+        }
+        
+        print(f"[DALL-E 3] Calling API...")
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        
+        print(f"[DALL-E 3] Response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'data' in result and len(result['data']) > 0:
+                bg_url = result['data'][0].get('url')
+                print(f"[DALL-E 3] ✓ Background created!")
+                
+                # Download background
+                bg_response = requests.get(bg_url, timeout=30)
+                return bg_response.content
+        
+        print(f"[DALL-E 3] API error: {response.text[:200]}")
+        return None
+        
+    except Exception as e:
+        print(f"[DALL-E 3 ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def composite_bottle_with_background(bottle_path, background_data):
+    """Composite bottle image with generated background"""
+    try:
+        from PIL import Image
+        import io
+        
+        print(f"[COMPOSITE] Compositing bottle with background...")
+        
+        # Load bottle (with transparent/white background)
+        bottle = Image.open(bottle_path)
+        if bottle.mode != 'RGBA':
+            bottle = bottle.convert('RGBA')
+        
+        # Load background
+        bg = Image.open(io.BytesIO(background_data))
+        if bg.size != (1024, 1024):
+            bg = bg.resize((1024, 1024), Image.Resampling.LANCZOS)
+        if bg.mode != 'RGBA':
+            bg = bg.convert('RGBA')
+        
+        # Resize bottle if needed
+        if bottle.width > 1024 or bottle.height > 1024:
+            bottle.thumbnail((800, 800), Image.Resampling.LANCZOS)
+        
+        # Calculate position to center bottle
+        x = (bg.width - bottle.width) // 2
+        y = (bg.height - bottle.height) // 2
+        
+        # Create composite
+        result = bg.copy()
+        result.paste(bottle, (x, y), bottle)
+        
+        print(f"[COMPOSITE] ✓ Composition complete!")
+        return result
+        
+    except Exception as e:
+        print(f"[COMPOSITE ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def stylize_image_openai(image_path, description, custom_prompt=None):
+    """Add styled background based on perfume description using OpenAI"""
+    if not OPENAI_API_KEY:
+        raise ValueError("OpenAI API key not configured")
+    
+    try:
+        from PIL import Image
+        import io
+        
+        print(f"[OpenAI] Starting stylization for: {image_path}")
+        
+        # Get absolute path
+        abs_path = os.path.abspath(image_path)
+        # Replace _nobg with _styled (handle timestamp in filename)
+        output_path = image_path.replace('_nobg', '_styled').replace('.jpg', '_styled.png').replace('.jpeg', '_styled.png')
+        abs_output = os.path.abspath(output_path)
+        
+        print(f"[OpenAI] Input: {abs_path}")
+        print(f"[OpenAI] Output: {abs_output}")
+        
+        # Convert to PNG with RGBA (OpenAI requires RGBA format!)
+        img = Image.open(abs_path)
+        
+        # Convert to RGBA (add alpha channel)
+        if img.mode != 'RGBA':
+            print(f"[OpenAI] Converting from {img.mode} to RGBA")
+            img = img.convert('RGBA')
+        
+        # Resize if too large (max 4MB)
+        if img.width > 1024 or img.height > 1024:
+            print(f"[OpenAI] Resizing from {img.width}x{img.height} to fit 1024x1024")
+            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        
+        # Convert to PNG in memory
+        png_buffer = io.BytesIO()
+        img.save(png_buffer, format='PNG')
+        png_buffer.seek(0)
+        png_data = png_buffer.read()
+        
+        print(f"[OpenAI] Converted to PNG RGBA: {len(png_data)} bytes ({len(png_data)/1024/1024:.2f} MB)")
+        
+        # Use custom prompt or default with template
+        if custom_prompt:
+            # Replace {DESCRIPTION} placeholder with actual description
+            style_prompt = custom_prompt.replace('{DESCRIPTION}', description[:350])
+            print(f"[OpenAI] Using CUSTOM prompt template!")
+            print(f"[OpenAI] Custom prompt length: {len(custom_prompt)} chars")
+            print(f"[OpenAI] Final prompt length: {len(style_prompt)} chars")
+        else:
+            style_prompt = f"""Add a beautiful, elegant background that captures the essence and mood of this perfume:
+
+{description[:350]}
+
+Create sophisticated commercial photography with atmospheric colors and style matching the fragrance notes. 
+Keep the perfume bottle centered, sharp, and as the main focus. Professional advertising quality."""
+            print(f"[OpenAI] Using DEFAULT prompt (no custom provided)")
+        
+        print(f"[OpenAI] Final prompt preview: {style_prompt[:150]}...")
+        print(f"[OpenAI] Sending to DALL-E 2...")
+        
+        # Create multipart form data
+        png_buffer.seek(0)
+        files = {
+            'image': ('image.png', png_buffer, 'image/png'),
+            'model': (None, 'dall-e-2'),
+            'prompt': (None, style_prompt),
+            'n': (None, '1'),
+            'size': (None, '1024x1024')
+        }
+        
+        headers = {
+            'Authorization': f'Bearer {OPENAI_API_KEY}'
+        }
+        
+        url = "https://api.openai.com/v1/images/edits"
+        print(f"[OpenAI] Calling stylization API...")
+        
+        response = requests.post(url, headers=headers, files=files, timeout=120)
+        
+        print(f"[OpenAI] Response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            if 'data' in result and len(result['data']) > 0:
+                image_url = result['data'][0].get('url')
+                if image_url:
+                    print(f"[OpenAI] Downloading styled result...")
+                    img_response = requests.get(image_url, timeout=30)
+                    
+                    with open(abs_output, 'wb') as f:
+                        f.write(img_response.content)
+                    
+                    print(f"[OpenAI] ✓ Image stylized successfully!")
+                    return output_path
+        
+        print(f"[OpenAI] API response: {response.text[:300]}")
+        return image_path
+        
+    except Exception as e:
+        print(f"[OpenAI ERROR] Stylization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return image_path
+
 @app.route('/')
 def index():
     """Render main page"""
@@ -454,8 +670,6 @@ def generate():
         perfume_name = data.get('perfume_name', '').strip()
         description = data.get('description', '').strip()
         image_url = data.get('image_url', '').strip()
-        image_path = data.get('image_path', '').strip()  # Main image from database
-        product_id = data.get('product_id')  # Product ID from database (optional)
         
         # Get custom prompts or use defaults
         prompt_background = data.get('prompt_background', '').strip()
@@ -482,24 +696,7 @@ def generate():
         print(f"[FILENAME] Sanitized: '{brand} {perfume_name}' -> '{safe_name}'")
         
         # Step 1: Get image
-        # Priority: 1) Main image from DB, 2) URL from form, 3) Auto-search
-        if image_path:
-            # Use main image from database
-            print(f"[1/4] Using main image from database: {image_path}")
-            source_path = os.path.join(UPLOAD_FOLDER, image_path)
-            
-            if not os.path.exists(source_path):
-                print(f"[ERROR] Main image not found: {source_path}")
-                return jsonify({'error': f'Main image not found: {image_path}'}), 400
-            
-            # Copy to working filename
-            original_filename = f"{safe_name}_original_{timestamp}.jpg"
-            original_path = os.path.join(UPLOAD_FOLDER, original_filename)
-            import shutil
-            shutil.copy(source_path, original_path)
-            print(f"[SUCCESS] Copied main image to: {original_filename}")
-            
-        elif image_url:
+        if image_url:
             print(f"[1/4] Downloading image from URL...")
             original_filename = f"{safe_name}_original_{timestamp}.jpg"
             original_path = download_image(image_url, original_filename)
@@ -605,22 +802,6 @@ def generate():
         
         save_history(generation_entry)
         
-        # Update database with styled image path (if product_id provided)
-        if product_id:
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    UPDATE randewoo_products
-                    SET styled_image_path = ?
-                    WHERE id = ?
-                ''', (final_filename, product_id))
-                conn.commit()
-                conn.close()
-                print(f"[DB] Updated styled_image_path for product {product_id}: {final_filename}")
-            except Exception as e:
-                print(f"[DB ERROR] Failed to update styled_image_path: {e}")
-        
         return jsonify({
             'success': True,
             'message': 'Image generated successfully',
@@ -629,7 +810,6 @@ def generate():
                 'perfume_name': perfume_name,
                 'timestamp': timestamp,
                 'image_url': f'/images/{final_filename}',
-                'styled_url': f'/images/{final_filename}',
                 'requires_manual_processing': False,
                 'original_filename': original_filename if image_url else None,
                 'final_filename': final_filename
@@ -640,6 +820,33 @@ def generate():
         print(f"Error in generate: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/process-with-mcp', methods=['POST'])
+def process_with_mcp():
+    """
+    Endpoint to receive results from MCP tool processing
+    This is called after manual MCP tool invocation
+    """
+    try:
+        data = request.json
+        final_image_path = data.get('final_image_path')
+        timestamp = data.get('timestamp')
+        
+        # Update history
+        history = load_history()
+        for entry in history:
+            if entry['timestamp'] == timestamp:
+                entry['status'] = 'completed'
+                entry['final_image_path'] = final_image_path
+                break
+        
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/history')
@@ -655,8 +862,15 @@ def serve_image(filename):
 
 @app.route('/api/search-image', methods=['POST'])
 def search_image():
-    """Search for perfume bottle image - tries Randewoo first, then Google"""
+    """Search for perfume bottle image using OpenAI"""
     print("[API] /api/search-image endpoint called")
+    
+    # Force reload module to get latest changes (fix for Flask caching)
+    import importlib
+    import image_search
+    importlib.reload(image_search)
+    from image_search import search_perfume_image as search_fn
+    print("[API] image_search module reloaded!")
     
     try:
         # Get request data
@@ -674,10 +888,7 @@ def search_image():
         
         brand = data.get('brand', '').strip()
         perfume_name = data.get('perfume_name', '').strip()
-        product_url = data.get('product_url', '').strip()
-        
         print(f"[API] Brand: '{brand}', Perfume: '{perfume_name}'")
-        print(f"[API] Product URL: '{product_url}'")
         
         if not brand or not perfume_name:
             print("[API] ERROR: Missing brand or perfume name")
@@ -687,35 +898,9 @@ def search_image():
                 'message': 'Brand and perfume name are required'
             }), 400
         
-        # STEP 1: Try to extract image from Randewoo if URL provided
-        if product_url and 'randewoo.ru' in product_url:
-            print("[API] Trying to extract image from Randewoo first...")
-            randewoo_result = extract_randewoo_image(product_url)
-            
-            if randewoo_result:
-                print(f"[API] Found image on Randewoo: {randewoo_result['url']}")
-                return jsonify({
-                    'success': True,
-                    'image_url': randewoo_result['url'],
-                    'title': randewoo_result.get('title', 'Randewoo Product Image'),
-                    'source': 'randewoo',
-                    'message': 'Image found on Randewoo'
-                })
-            else:
-                print("[API] No image found on Randewoo, falling back to Google search...")
-        else:
-            print("[API] No Randewoo URL provided, using Google search...")
+        print(f"[API] Calling search_fn({brand}, {perfume_name})...")
         
-        # STEP 2: Fallback to Google Custom Search API
-        # Force reload module to get latest changes (fix for Flask caching)
-        import importlib
-        import image_search
-        importlib.reload(image_search)
-        from image_search import search_perfume_image as search_fn
-        print("[API] image_search module reloaded!")
-        
-        print(f"[API] Calling Google search: search_fn({brand}, {perfume_name})...")
-        
+        # Search using Google Custom Search API
         try:
             result = search_fn(brand, perfume_name)
             print(f"[API] search_perfume_image returned: {result}")
@@ -849,7 +1034,7 @@ def generate_video_concept_with_claude(brand, perfume_name, description):
                 # Output is a list of strings, join them
                 result_text = ''.join(output) if isinstance(output, list) else str(output)
                 
-                print(f"[CLAUDE] Concept generated!")
+                print(f"[CLAUDE] ✓ Concept generated!")
                 print(f"[CLAUDE] Result preview: {result_text[:200]}...")
                 
                 # Parse the result
@@ -926,65 +1111,22 @@ def generate_video_seedance(image_path, video_prompt):
         }
         
         print(f"[SEEDANCE] Calling Seedance-1-pro API...")
+        response = requests.post(
+            'https://api.replicate.com/v1/models/bytedance/seedance-1-pro/predictions',
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
         
-        # Retry logic for temporary errors (502, 503)
-        max_retries = 3
-        retry_delay = 5  # seconds
-        
-        for attempt in range(max_retries):
-            try:
-                if attempt > 0:
-                    print(f"[SEEDANCE] Retry attempt {attempt + 1}/{max_retries} after {retry_delay}s...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-                
-                response = requests.post(
-                    'https://api.replicate.com/v1/models/bytedance/seedance-1-pro/predictions',
-                    headers=headers,
-                    json=payload,
-                    timeout=30
-                )
-                
-                # Success
-                if response.status_code == 201:
-                    prediction = response.json()
-                    prediction_id = prediction['id']
-                    print(f"[SEEDANCE] Prediction created: {prediction_id}")
-                    print(f"[SEEDANCE] Generating 5-second video at 480p 24fps... This may take 2-3 minutes.")
-                    break
-                
-                # Temporary errors - retry
-                elif response.status_code in [502, 503, 504]:
-                    print(f"[SEEDANCE WARN] Temporary error {response.status_code} (Gateway issue)")
-                    if attempt < max_retries - 1:
-                        continue
-                    else:
-                        print(f"[SEEDANCE ERROR] Max retries reached")
-                        print(f"[SEEDANCE ERROR] Replicate API may be temporarily unavailable")
-                        return None
-                
-                # Permanent errors - don't retry
-                else:
-                    print(f"[SEEDANCE ERROR] Failed to create prediction: {response.status_code}")
-                    print(f"[SEEDANCE ERROR] Response: {response.text[:500]}")
-                    return None
-                    
-            except requests.exceptions.Timeout:
-                print(f"[SEEDANCE ERROR] Request timeout on attempt {attempt + 1}")
-                if attempt < max_retries - 1:
-                    continue
-                else:
-                    return None
-            except requests.exceptions.RequestException as e:
-                print(f"[SEEDANCE ERROR] Network error: {e}")
-                if attempt < max_retries - 1:
-                    continue
-                else:
-                    return None
-        else:
-            # All retries failed
-            print(f"[SEEDANCE ERROR] All retry attempts failed")
+        if response.status_code != 201:
+            print(f"[SEEDANCE ERROR] Failed to create prediction: {response.status_code}")
+            print(f"[SEEDANCE ERROR] Response: {response.text}")
             return None
+        
+        prediction = response.json()
+        prediction_id = prediction['id']
+        print(f"[SEEDANCE] Prediction created: {prediction_id}")
+        print(f"[SEEDANCE] Generating 5-second video at 480p 24fps... This may take 2-3 minutes.")
         
         # Poll for result
         max_attempts = 90  # ~4.5 minutes max
@@ -1008,7 +1150,7 @@ def generate_video_seedance(image_path, video_prompt):
                 
                 result_response = requests.get(output_url, timeout=180)
                 
-                print(f"[SEEDANCE] Video generated successfully!")
+                print(f"[SEEDANCE] ✓ Video generated successfully!")
                 return result_response.content
             
             elif status == 'failed':
@@ -1033,7 +1175,6 @@ def generate_video():
         brand = data.get('brand', '').strip()
         perfume_name = data.get('perfume_name', '').strip()
         description = data.get('description', '').strip()
-        product_id = data.get('product_id')  # Product ID from database (optional)
         
         print(f"[VIDEO API] Starting video generation with Claude + Seedance-1-pro")
         print(f"[VIDEO API] Brand: {brand}, Perfume: {perfume_name}")
@@ -1110,23 +1251,7 @@ def generate_video():
         with open(video_path, 'wb') as f:
             f.write(video_data)
         
-        print(f"[VIDEO API] Video generated: {video_filename}")
-        
-        # Update database with video path (if product_id provided)
-        if product_id:
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    UPDATE randewoo_products
-                    SET video_path = ?
-                    WHERE id = ?
-                ''', (video_filename, product_id))
-                conn.commit()
-                conn.close()
-                print(f"[DB] Updated video_path for product {product_id}: {video_filename}")
-            except Exception as e:
-                print(f"[DB ERROR] Failed to update video_path: {e}")
+        print(f"[VIDEO API] ✓ Video generated: {video_filename}")
         
         return jsonify({
             'success': True,
@@ -1153,121 +1278,6 @@ def serve_video(filename):
     """Serve generated videos"""
     return send_from_directory(VIDEO_FOLDER, filename)
 
-@app.route('/api/generate-tg-caption', methods=['POST'])
-def generate_tg_caption():
-    """Generate Telegram caption using Claude via Replicate"""
-    try:
-        data = request.json
-        brand = data.get('brand', '').strip()
-        perfume_name = data.get('perfume_name', '').strip()
-        description = data.get('description', '').strip()
-        custom_prompt = data.get('prompt', '').strip()
-        
-        print(f"[TG CAPTION] Generating caption for: {brand} {perfume_name}")
-        
-        # Validation
-        if not all([brand, perfume_name, description]):
-            return jsonify({'error': 'Brand, perfume name and description are required'}), 400
-        
-        # Check if Replicate is configured
-        if not REPLICATE_API_TOKEN:
-            return jsonify({
-                'error': 'Replicate API not configured',
-                'message': 'Please add REPLICATE_API_TOKEN to .env file'
-            }), 500
-        
-        # Build Claude prompt
-        if custom_prompt:
-            # User provided custom prompt
-            claude_prompt = custom_prompt
-        else:
-            # Default prompt
-            claude_prompt = f"""Создай продающий пост для Telegram канала о парфюме {brand} {perfume_name}.
-
-Описание аромата: {description}
-
-Требования:
-- Текст должен быть живым и эмоциональным
-- Вызывать желание купить
-- Подчеркивать уникальность аромата
-- Использовать емодзи (но не переборщить)
-- Длина: 3-5 предложений
-- Стиль: casual, но профессионально
-
-Формат ответа: только текст поста, без заголовков и пояснений."""
-        
-        headers = {
-            'Authorization': f'Token {REPLICATE_API_TOKEN}',
-            'Content-Type': 'application/json'
-        }
-        
-        # Call Claude via Replicate
-        payload = {
-            'input': {
-                'prompt': claude_prompt,
-                'max_tokens': 1024
-            }
-        }
-        
-        print(f"[TG CAPTION] Calling Claude 4.5 Sonnet via Replicate...")
-        response = requests.post(
-            'https://api.replicate.com/v1/models/anthropic/claude-4.5-sonnet/predictions',
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        
-        if response.status_code != 201:
-            print(f"[TG CAPTION ERROR] Failed to create prediction: {response.status_code}")
-            print(f"[TG CAPTION ERROR] Response: {response.text}")
-            return jsonify({'error': f'Failed to call Claude: {response.status_code}'}), 500
-        
-        prediction = response.json()
-        prediction_id = prediction['id']
-        print(f"[TG CAPTION] Prediction created: {prediction_id}")
-        
-        # Poll for result
-        max_attempts = 60
-        for attempt in range(max_attempts):
-            time.sleep(2)
-            
-            response = requests.get(
-                f'https://api.replicate.com/v1/predictions/{prediction_id}',
-                headers=headers,
-                timeout=30
-            )
-            
-            prediction = response.json()
-            status = prediction['status']
-            
-            if status == 'succeeded':
-                output = prediction['output']
-                if isinstance(output, list):
-                    caption = ''.join(output).strip()
-                else:
-                    caption = str(output).strip()
-                
-                print(f"[TG CAPTION] Caption generated: {caption[:100]}...")
-                
-                return jsonify({
-                    'success': True,
-                    'caption': caption,
-                    'prompt_used': claude_prompt
-                })
-            
-            elif status == 'failed':
-                print(f"[TG CAPTION ERROR] Prediction failed: {prediction.get('error')}")
-                return jsonify({'error': f"Claude failed: {prediction.get('error')}"}), 500
-        
-        print(f"[TG CAPTION ERROR] Timeout waiting for Claude")
-        return jsonify({'error': 'Timeout waiting for Claude response'}), 500
-        
-    except Exception as e:
-        print(f"Error in generate_tg_caption: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/test')
 def test():
     """Test endpoint"""
@@ -1278,456 +1288,6 @@ def test():
         'upload_folder': UPLOAD_FOLDER,
         'video_folder': VIDEO_FOLDER
     })
-
-# ============================================================================
-# RANDEWOO PRODUCTS API
-# ============================================================================
-
-@app.route('/api/products')
-def api_get_products():
-    """Get all Randewoo products"""
-    try:
-        products = get_all_products()
-        return jsonify({
-            'success': True,
-            'products': products,
-            'total': len(products)
-        })
-    except Exception as e:
-        print(f"[API ERROR] Failed to get products: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/products/<int:product_id>')
-def api_get_product(product_id):
-    """Get single product by ID"""
-    try:
-        product = get_product_by_id(product_id)
-        if product:
-            return jsonify({'success': True, 'product': product})
-        else:
-            return jsonify({'success': False, 'error': 'Product not found'}), 404
-    except Exception as e:
-        print(f"[API ERROR] Failed to get product: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/save-main-image', methods=['POST'])
-def api_save_main_image():
-    """Download image from URL and save as main image for product"""
-    try:
-        import re
-        
-        data = request.json
-        image_url = data.get('image_url', '').strip()
-        product_id = data.get('product_id')
-        brand = data.get('brand', '').strip()
-        name = data.get('name', '').strip()
-        
-        if not image_url:
-            return jsonify({'success': False, 'error': 'Image URL is required'}), 400
-        
-        if not product_id:
-            return jsonify({'success': False, 'error': 'Product ID is required'}), 400
-        
-        print(f"[SAVE MAIN] Downloading image for product #{product_id}")
-        print(f"[SAVE MAIN] URL: {image_url}")
-        
-        # Sanitize filename
-        def sanitize_filename(text):
-            text = re.sub(r'[<>:"/\\|?*]', '_', text)
-            text = text.replace(' ', '_')
-            text = text.replace("'", "")
-            return text[:100]
-        
-        # Create filename
-        brand_clean = sanitize_filename(brand) if brand else 'Unknown'
-        name_clean = sanitize_filename(name) if name else 'Product'
-        filename = f"{brand_clean}_{name_clean}_{product_id}.jpg"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        
-        # Download image
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(image_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        # Save to file
-        with open(filepath, 'wb') as f:
-            f.write(response.content)
-        
-        print(f"[SAVE MAIN] Saved to: {filename}")
-        
-        # Update database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            UPDATE randewoo_products
-            SET image_path = ?
-            WHERE id = ?
-        ''', (filename, product_id))
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"[SAVE MAIN] Updated database for product #{product_id}")
-        
-        return jsonify({
-            'success': True,
-            'image_path': filename,
-            'message': 'Image saved successfully'
-        })
-        
-    except requests.exceptions.RequestException as e:
-        print(f"[SAVE MAIN ERROR] Failed to download image: {e}")
-        return jsonify({'success': False, 'error': f'Failed to download image: {str(e)}'}), 500
-    except Exception as e:
-        print(f"[SAVE MAIN ERROR] {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/parse-description', methods=['POST'])
-def api_parse_description():
-    """Parse perfume description from Randewoo product page"""
-    try:
-        from bs4 import BeautifulSoup
-        
-        data = request.json
-        product_url = data.get('product_url', '').strip()
-        
-        if not product_url:
-            return jsonify({'success': False, 'error': 'Product URL is required'}), 400
-        
-        print(f"[PARSER] Fetching description from: {product_url}")
-        
-        # Fetch page
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        response = requests.get(product_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        # Parse HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Find collapsable div with description
-        collapsable_div = soup.find('div', class_='collapsable')
-        
-        if not collapsable_div:
-            print(f"[PARSER] No collapsable div found")
-            return jsonify({'success': False, 'error': 'Description block not found on page'}), 404
-        
-        # Extract text from all paragraphs
-        paragraphs = collapsable_div.find_all('p')
-        description_parts = []
-        
-        for p in paragraphs:
-            # Remove links but keep their text
-            for a in p.find_all('a'):
-                a.replace_with(a.get_text())
-            
-            # Get clean text
-            text = p.get_text().strip()
-            if text:
-                description_parts.append(text)
-        
-        description = '\n\n'.join(description_parts)
-        
-        if not description:
-            print(f"[PARSER] No description text found in collapsable div")
-            return jsonify({'success': False, 'error': 'Description text is empty'}), 404
-        
-        print(f"[PARSER] Successfully parsed description ({len(description)} chars)")
-        
-        return jsonify({
-            'success': True,
-            'description': description
-        })
-        
-    except requests.exceptions.RequestException as e:
-        print(f"[PARSER ERROR] Failed to fetch page: {e}")
-        return jsonify({'success': False, 'error': f'Failed to fetch page: {str(e)}'}), 500
-    except Exception as e:
-        print(f"[PARSER ERROR] Failed to parse description: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-def extract_randewoo_image(product_url):
-    """
-    Extract high-quality product image from Randewoo product page
-    
-    Args:
-        product_url: Randewoo product URL
-    
-    Returns:
-        dict with image URL or None if not found
-    """
-    try:
-        from bs4 import BeautifulSoup
-        
-        print(f"[RANDEWOO IMG] Fetching image from: {product_url}")
-        
-        # Fetch page
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        response = requests.get(product_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        # Parse HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Find main product image
-        # Looking for: <img class="js-main-product-image s-productItem__imgMain" data-zoom-image="...">
-        main_img = soup.find('img', class_='js-main-product-image')
-        
-        if not main_img:
-            print(f"[RANDEWOO IMG] No main product image found")
-            return None
-        
-        # Try to get high quality image
-        # Priority: data-zoom-image > srcset (2x) > src
-        image_url = None
-        
-        # 1. Try data-zoom-image (highest quality)
-        if main_img.get('data-zoom-image'):
-            image_url = main_img.get('data-zoom-image')
-            print(f"[RANDEWOO IMG] Found data-zoom-image: {image_url}")
-        
-        # 2. Try srcset (look for 2x version)
-        elif main_img.get('srcset'):
-            srcset = main_img.get('srcset')
-            # Parse srcset: "url1 1x, url2 2x"
-            parts = [s.strip() for s in srcset.split(',')]
-            for part in parts:
-                if '2x' in part:
-                    image_url = part.split()[0]
-                    print(f"[RANDEWOO IMG] Found srcset 2x: {image_url}")
-                    break
-            
-            # If no 2x found, use first URL
-            if not image_url and parts:
-                image_url = parts[0].split()[0]
-                print(f"[RANDEWOO IMG] Found srcset 1x: {image_url}")
-        
-        # 3. Fallback to src
-        elif main_img.get('src'):
-            image_url = main_img.get('src')
-            print(f"[RANDEWOO IMG] Found src: {image_url}")
-        
-        if not image_url:
-            print(f"[RANDEWOO IMG] No image URL extracted")
-            return None
-        
-        # Make URL absolute if relative
-        if image_url.startswith('//'):
-            image_url = 'https:' + image_url
-        elif image_url.startswith('/'):
-            image_url = 'https://randewoo.ru' + image_url
-        
-        print(f"[RANDEWOO IMG] Successfully extracted image: {image_url}")
-        
-        return {
-            'url': image_url,
-            'source': 'randewoo',
-            'title': main_img.get('title', 'Randewoo Product Image')
-        }
-        
-    except requests.exceptions.RequestException as e:
-        print(f"[RANDEWOO IMG ERROR] Failed to fetch page: {e}")
-        return None
-    except Exception as e:
-        print(f"[RANDEWOO IMG ERROR] Failed to extract image: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-# ============================================================================
-# GLOBAL SETTINGS API
-# ============================================================================
-
-@app.route('/api/settings/prompts', methods=['GET'])
-def api_get_prompts():
-    """Get global prompt settings from database"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT key, value FROM global_settings
-            WHERE key IN ('prompt_stylize', 'prompt_caption')
-        ''')
-        
-        rows = cursor.fetchall()
-        conn.close()
-        
-        prompts = {}
-        for row in rows:
-            prompts[row['key']] = row['value']
-        
-        return jsonify({
-            'success': True,
-            'prompts': {
-                'stylize': prompts.get('prompt_stylize', ''),
-                'caption': prompts.get('prompt_caption', '')
-            }
-        })
-        
-    except Exception as e:
-        print(f"[API ERROR] Failed to get prompts: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/settings/prompts', methods=['POST'])
-def api_update_prompts():
-    """Update global prompt settings in database"""
-    try:
-        data = request.json
-        prompt_stylize = data.get('prompt_stylize', '').strip()
-        prompt_caption = data.get('prompt_caption', '').strip()
-        
-        if not prompt_stylize or not prompt_caption:
-            return jsonify({'success': False, 'error': 'Both prompts are required'}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Update or insert stylize prompt
-        cursor.execute('''
-            INSERT OR REPLACE INTO global_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-        ''', ('prompt_stylize', prompt_stylize, datetime.now()))
-        
-        # Update or insert caption prompt
-        cursor.execute('''
-            INSERT OR REPLACE INTO global_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-        ''', ('prompt_caption', prompt_caption, datetime.now()))
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"[SETTINGS] Prompts updated:")
-        print(f"  - prompt_stylize: {len(prompt_stylize)} chars")
-        print(f"  - prompt_caption: {len(prompt_caption)} chars")
-        
-        return jsonify({
-            'success': True,
-            'message': 'Prompts updated successfully'
-        })
-        
-    except Exception as e:
-        print(f"[API ERROR] Failed to update prompts: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-# ============================================================================
-# TELEGRAM PUBLISH API
-# ============================================================================
-
-@app.route('/api/publish-to-telegram', methods=['POST'])
-def api_publish_to_telegram():
-    """Publish perfume to Telegram channel with image or video"""
-    try:
-        data = request.json
-        
-        brand = data.get('brand', '').strip()
-        perfume_name = data.get('perfume_name', '').strip()
-        caption = data.get('caption', '').strip()  # Generated caption from Claude
-        media_file = data.get('media_file', '').strip()  # filename
-        media_type = data.get('media_type', 'image').strip()  # 'image' or 'video'
-        product_url = data.get('product_url', '').strip()
-        
-        print(f"[TELEGRAM] Publishing to channel: {brand} - {perfume_name}")
-        print(f"[TELEGRAM] Media type: {media_type}")
-        
-        # Validation
-        if not all([brand, perfume_name, caption]):
-            return jsonify({'error': 'Brand, perfume name and caption are required'}), 400
-        
-        if not media_file:
-            return jsonify({'error': 'Media file is required. Please generate visual first.'}), 400
-        
-        # Check Telegram configuration
-        if not TELEGRAM_BOT_TOKEN:
-            return jsonify({'error': 'Telegram Bot Token not configured in .env'}), 500
-        
-        if not TELEGRAM_CHANNEL_ID:
-            return jsonify({'error': 'Telegram Channel ID not configured in .env'}), 500
-        
-        # Add product URL to caption if provided
-        telegram_caption = caption
-        if product_url:
-            telegram_caption += f"\n\n{product_url}"
-        
-        # Limit caption to 1024 characters (Telegram limit)
-        if len(telegram_caption) > 1024:
-            telegram_caption = telegram_caption[:1021] + "..."
-        
-        # Prepare media file path
-        if media_type == 'video':
-            media_path = os.path.join(VIDEO_FOLDER, media_file)
-            if not os.path.exists(media_path):
-                return jsonify({'error': f'Video file not found: {media_file}'}), 404
-            
-            print(f"[TELEGRAM] Sending video: {media_file}")
-            
-            # Send video
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
-            
-            with open(media_path, 'rb') as vid_file:
-                files = {'video': vid_file}
-                payload = {
-                    "chat_id": TELEGRAM_CHANNEL_ID,
-                    "caption": telegram_caption
-                }
-                
-                response = requests.post(url, data=payload, files=files, timeout=60)
-        else:
-            # Send image
-            media_path = os.path.join(UPLOAD_FOLDER, media_file)
-            if not os.path.exists(media_path):
-                return jsonify({'error': f'Image file not found: {media_file}'}), 404
-            
-            print(f"[TELEGRAM] Sending image: {media_file}")
-            
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-            
-            with open(media_path, 'rb') as img_file:
-                files = {'photo': img_file}
-                payload = {
-                    "chat_id": TELEGRAM_CHANNEL_ID,
-                    "caption": telegram_caption
-                }
-                
-                response = requests.post(url, data=payload, files=files, timeout=60)
-        
-        result = response.json()
-        
-        if result.get('ok'):
-            print(f"[TELEGRAM] Published successfully!")
-            return jsonify({
-                'success': True,
-                'message': 'Published to Telegram successfully',
-                'telegram_response': result
-            })
-        else:
-            error_desc = result.get('description', 'Unknown error')
-            print(f"[TELEGRAM ERROR] {error_desc}")
-            return jsonify({
-                'success': False,
-                'error': f'Telegram API error: {error_desc}'
-            }), 500
-        
-    except Exception as e:
-        print(f"[TELEGRAM ERROR] {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     PORT = 8080
@@ -1740,3 +1300,4 @@ if __name__ == '__main__':
     print(f"Open in browser: http://localhost:{PORT}")
     print("=" * 70)
     app.run(debug=True, host='0.0.0.0', port=PORT)
+
