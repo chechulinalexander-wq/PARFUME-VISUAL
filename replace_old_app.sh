@@ -70,6 +70,13 @@ echo ""
 echo "Step 6: Cloning new repository..."
 if [ -d "$APP_DIR/.git" ]; then
     echo "Repository exists, pulling latest..."
+    
+    # Fix ownership issues
+    chown -R root:root $APP_DIR
+    
+    # Add to safe directories if needed
+    git config --global --add safe.directory $APP_DIR 2>/dev/null || true
+    
     cd $APP_DIR
     git fetch --all
     git checkout $BRANCH
