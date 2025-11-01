@@ -237,10 +237,10 @@ echo "✓ Supervisor configured"
 echo ""
 echo "Step 11: Configuring Nginx..."
 
-# Backup default config if exists
-if [ -f /etc/nginx/sites-enabled/default ]; then
-    mv /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/default.backup
-fi
+# Remove all default server configs
+rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-enabled/default.backup
+rm -f /etc/nginx/sites-available/default.backup
 
 cat > /etc/nginx/sites-available/perfume-visual <<EOF
 server {
