@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perfume Visual Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="logo">✨ Perfume Visual</h1>
+            <p class="subtitle">AI-powered perfume image generator</p>
+        </header>
+
+        <main class="main-content">
+            <!-- Randewoo Products Section -->
+            <div class="randewoo-section">
+                <div class="randewoo-header">
+                    <h2 class="section-title">📦 Товары Randewoo</h2>
+                    <button type="button" class="btn-refresh-products" id="refreshProductsBtn">
+                        <span>🔄 Refresh</span>
+                    </button>
+                </div>
+                
+                <div class="products-table-container">
+                    <table class="products-table" id="productsTable">
+                        <thead>
+                            <tr>
+                                <th style="width: 60px;">ID</th>
+                                <th style="width: 80px;">Image</th>
+                                <th style="width: 120px;">Brand</th>
+                                <th style="width: 180px;">Name</th>
+                                <th style="width: 350px;">Description</th>
+                                <th style="width: 100px;">Randewoo</th>
+                                <th style="width: 100px;">Fragrantica</th>
+                            </tr>
+                        </thead>
+                        <tbody id="productsTableBody">
+                            <tr>
+                                <td colspan="7" style="text-align: center; padding: 20px; color: var(--text-secondary);">
+                                    Loading products...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="products-actions">
+                    <button type="button" class="btn-select-perfume" id="selectPerfumeBtn" disabled>
+                        ✨ Выбрать аромат
+                    </button>
+                    <span class="selected-product-info" id="selectedProductInfo" style="display: none;">
+                        <span class="info-label">Selected:</span>
+                        <span class="info-value" id="selectedProductText"></span>
+                    </span>
+                </div>
+            </div>
+
+            <div class="grid-layout">
+                <!-- Left Panel - Form -->
+                <div class="form-panel">
+                    <h2 class="section-title">✨ Visual Generator</h2>
+                    
+                    <form id="generateForm" class="perfume-form">
+                        <div class="form-group">
+                            <label for="brand">Brand Name</label>
+                            <input 
+                                type="text" 
+                                id="brand" 
+                                name="brand" 
+                                placeholder="e.g., What We Do Is Secret"
+                                required
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label for="perfume_name">Perfume Name</label>
+                            <input 
+                                type="text" 
+                                id="perfume_name" 
+                                name="perfume_name" 
+                                placeholder="e.g., Paris'L.A."
+                                required
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label for="description">Fragrance Description</label>
+                            <textarea 
+                                id="description" 
+                                name="description" 
+                                rows="8"
+                                placeholder="Describe the perfume: mood, notes, emotions, target audience..."
+                                required
+                            ></textarea>
+                            <div class="char-counter">
+                                <span id="charCount">0</span> / 2000 characters
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="image_url">Image URL</label>
+                            <div class="url-input-group">
+                                <input 
+                                    type="url" 
+                                    id="image_url" 
+                                    name="image_url" 
+                                    placeholder="https://example.com/perfume-bottle.jpg"
+                                >
+                                <button type="button" class="btn-auto-find" id="autoFindBtn">
+                                    <span class="btn-auto-text">🔍 Auto-Find</span>
+                                    <span class="btn-auto-loader" style="display: none;">
+                                        <span class="spinner-small"></span>
+                                    </span>
+                                </button>
+                                <button type="button" class="btn-save-main" id="saveMainBtn">
+                                    <span class="btn-save-text">💾 Save as main</span>
+                                    <span class="btn-save-loader" style="display: none;">
+                                        <span class="spinner-small"></span>
+                                    </span>
+                                </button>
+                            </div>
+                            <small class="form-hint">Optional if main image is saved. Or use Auto-Find, or paste direct link</small>
+                            
+                            <!-- Main Image Preview -->
+                            <div id="mainImagePreview" style="display: none; margin-top: 12px; padding: 12px; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border);">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <img id="mainImageThumb" src="" alt="Main Image" style="width: 80px; height: 80px; object-fit: contain; border-radius: 4px; background: white;">
+                                    <div style="flex: 1;">
+                                        <div style="font-size: 0.9em; font-weight: 500; color: var(--text-primary); margin-bottom: 4px;">Main Image Saved</div>
+                                        <div id="mainImageFilename" style="font-size: 0.85em; color: var(--text-secondary);"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="example-urls">
+                            <small style="display: block; margin-bottom: 8px; color: var(--text-secondary); font-weight: 500;">Quick Examples:</small>
+                            <button type="button" class="example-url-btn" data-url="https://www.aroma-butik.ru/images/categories/reviews/review_96465_0_max.jpg" data-brand="What We Do Is Secret" data-perfume="Paris'L.A." data-desc="легкий, немного легкомысленный, гурманский унисекс-аромат. Парфюм покоряет своей непосредственностью, за которой скрыта особая энергетика бесшабашной подростковой жизни, проходящей на вечеринках и дискотеках, в ночных клубах и на улицах огромных мегаполисов. Бодрящая, шипучая кока-кола и ароматное миндальное печенье. Ноты: лайм, имбирь, нероли, мускус, амбра.">
+                                Load Paris'L.A. Example
+                            </button>
+                        </div>
+
+                        <!-- AI Prompts Section -->
+                        <div class="prompts-section">
+                            <div class="prompts-header">
+                                <h3>🤖 AI Processing Prompts</h3>
+                                <button type="button" class="btn-toggle-prompts" id="togglePromptsBtn">
+                                    <span class="toggle-text">Show Prompts</span>
+                                    <span class="toggle-icon">▼</span>
+                                </button>
+                            </div>
+                            
+                            <div class="prompts-content" id="promptsContent" style="display: none;">
+                                <p class="prompts-description">Customize how AI processes your images. These settings are global and apply to all perfumes.</p>
+                                
+                                <div class="form-group">
+                                    <label for="prompt_background">Background Removal Settings (Nano Banana)</label>
+                                    <textarea 
+                                        id="prompt_background" 
+                                        name="prompt_background" 
+                                        rows="3"
+                                        placeholder="Background removal via Google Nano Banana (Gemini 2.5 Flash)"
+                                        readonly
+                                        style="background-color: #f5f5f5; cursor: not-allowed;"
+                                    >Background removal via Google Nano Banana (Gemini 2.5 Flash Image) - AI understands context and preserves text/labels on bottle perfectly! (~$0.003 per image)</textarea>
+                                    <small class="form-hint">Powered by <a href="https://replicate.com/google/nano-banana" target="_blank">Nano Banana on Replicate</a>. Get API token at: <a href="https://replicate.com/account/api-tokens" target="_blank">replicate.com/account/api-tokens</a></small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="prompt_stylize">🍌 Background Stylization Prompt (Nano Banana / Gemini 2.5 Flash)</label>
+                                    <textarea 
+                                        id="prompt_stylize" 
+                                        name="prompt_stylize" 
+                                        rows="8"
+                                        placeholder="Natural language instructions for Gemini 2.5 Flash Image..."
+                                    >Loading from database...</textarea>
+                                    <small class="form-hint">Nano Banana understands natural language perfectly! Use {DESCRIPTION} placeholder. AI automatically preserves bottle while transforming background.</small>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="prompt_caption_global">💬 Caption Generation Prompt (Claude 4.5 Sonnet)</label>
+                                    <textarea 
+                                        id="prompt_caption_global" 
+                                        name="prompt_caption_global" 
+                                        rows="8"
+                                        placeholder="Instructions for Claude to generate Telegram captions..."
+                                    >Loading from database...</textarea>
+                                    <small class="form-hint">Use {BRAND}, {PERFUME_NAME}, and {DESCRIPTION} placeholders. Claude will generate engaging Telegram posts.</small>
+                                </div>
+                                
+                                <div class="prompts-actions" style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center;">
+                                    <button type="button" class="btn-save-prompts" id="savePromptsBtn">
+                                        <span class="btn-text">💾 Save Settings</span>
+                                        <span class="btn-loader" style="display: none;">
+                                            <span class="spinner-small"></span> Saving...
+                                        </span>
+                                    </button>
+                                    <span id="promptsSaveStatus" style="display: none; font-size: 0.875rem; color: var(--success);"></span>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>💰 Стоимость генерации (примерно)</label>
+                                    <div style="padding: 1rem; background: var(--bg-secondary); border-radius: var(--radius-sm); font-size: 0.875rem;">
+                                        <div style="margin-bottom: 0.5rem;">
+                                            <strong>Изображение:</strong>
+                                            <ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: var(--text-secondary);">
+                                                <li>Background Removal (Nano Banana): <span style="color: var(--success);">~$0.003</span></li>
+                                                <li>Background Stylization (Nano Banana): <span style="color: var(--success);">~$0.003</span></li>
+                                            </ul>
+                                        </div>
+                                        <div style="margin-bottom: 0.5rem;">
+                                            <strong>Видео (опционально):</strong>
+                                            <ul style="margin: 0.5rem 0; padding-left: 1.5rem; color: var(--text-secondary);">
+                                                <li>Claude 4.5 Sonnet (концепция): <span style="color: var(--success);">~$0.003</span></li>
+                                                <li>Seedance-1-pro (5 сек видео): <span style="color: var(--success);">~$0.02-0.05</span></li>
+                                            </ul>
+                                        </div>
+                                        <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); font-weight: 600;">
+                                            <strong>ИТОГО (изображение):</strong> <span style="color: var(--primary); font-size: 1rem;">~$0.006</span><br>
+                                            <strong>ИТОГО (изображение + видео):</strong> <span style="color: var(--primary); font-size: 1rem;">~$0.03-0.06</span>
+                                        </div>
+                                    </div>
+                                    <small class="form-hint">Цены указаны для Replicate API. Реальная стоимость может немного отличаться.</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn-generate" id="generateBtn">
+                            <span class="btn-text">Generate Visual</span>
+                            <span class="btn-loader" style="display: none;">
+                                <span class="spinner"></span> Processing...
+                            </span>
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Right Panel - Preview -->
+                <div class="preview-panel">
+                    <h2 class="section-title">Preview</h2>
+                    
+                    <div id="previewArea" class="preview-area">
+                        <div class="preview-placeholder">
+                            <svg class="placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <circle cx="8.5" cy="8.5" r="1.5"/>
+                                <polyline points="21 15 16 10 5 21"/>
+                            </svg>
+                            <p>Your generated image will appear here</p>
+                        </div>
+                    </div>
+
+                    <div id="processingSteps" class="processing-steps" style="display: none;">
+                        <div class="step" data-step="1">
+                            <div class="step-icon">1</div>
+                            <div class="step-content">
+                                <div class="step-title">Downloading Image</div>
+                                <div class="step-status">Pending...</div>
+                            </div>
+                        </div>
+                        <div class="step" data-step="2">
+                            <div class="step-icon">2</div>
+                            <div class="step-content">
+                                <div class="step-title">Removing Background</div>
+                                <div class="step-status">Pending...</div>
+                            </div>
+                        </div>
+                        <div class="step" data-step="3">
+                            <div class="step-icon">3</div>
+                            <div class="step-content">
+                                <div class="step-title">Stylizing Image</div>
+                                <div class="step-status">Pending...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="imageInfo" class="image-info" style="display: none;">
+                        <div class="info-row">
+                            <span class="info-label">Brand:</span>
+                            <span class="info-value" id="infoBrand"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Perfume:</span>
+                            <span class="info-value" id="infoPerfume"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Generated:</span>
+                            <span class="info-value" id="infoTime"></span>
+                        </div>
+                        <button class="btn-download" id="downloadBtn" style="display: none;">
+                            Download Image
+                        </button>
+                        <button class="btn-generate-video" id="generateVideoBtn" style="display: none;">
+                            <span class="btn-text">🎬 Generate Video</span>
+                            <span class="btn-loader" style="display: none;">
+                                <span class="spinner"></span> Generating...
+                            </span>
+                        </button>
+                    </div>
+
+                    <!-- Video Preview Section -->
+                    <div id="videoPreview" class="video-preview-area" style="display: none;">
+                        <h3 class="section-subtitle">🎬 Video Preview (Seedance-1-pro)</h3>
+                        <video id="videoPlayer" controls style="width: 100%; border-radius: 12px; margin-top: 12px;"></video>
+                        
+                        <!-- Video Concept and Prompt -->
+                        <div class="video-info-section" style="margin-top: 1rem; display: none;">
+                            <h4 style="font-size: 1rem; color: var(--text-primary); margin-bottom: 0.5rem;">💡 Концепция (от Claude):</h4>
+                            <div id="videoConcept" style="padding: 0.75rem; background: var(--bg-secondary); border-radius: var(--radius-sm); margin-bottom: 1rem; color: var(--text-secondary);"></div>
+                            
+                            <h4 style="font-size: 1rem; color: var(--text-primary); margin-bottom: 0.5rem;">📝 Промт (для Seedance):</h4>
+                            <div id="videoPrompt" style="padding: 0.75rem; background: var(--bg-secondary); border-radius: var(--radius-sm); font-family: monospace; font-size: 0.875rem; color: var(--text-secondary); white-space: pre-wrap;"></div>
+                        </div>
+                        
+                        <button class="btn-download" id="downloadVideoBtn" style="margin-top: 12px;">
+                            Download Video
+                        </button>
+                        
+                        <button class="btn-publish-telegram" id="showTelegramBtn" style="margin-top: 12px; display: inline-block;">
+                            📤 Create TG post
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History Section -->
+            <div class="history-section" style="display: none;">
+                <h2 class="section-title">Recent Generations</h2>
+                <div id="historyGrid" class="history-grid"></div>
+            </div>
+
+            <!-- Telegram Publish Section -->
+            <div class="telegram-section" id="telegramSection" style="display: none;">
+                <div class="telegram-header">
+                    <h2 class="section-title">📤 Post to Telegram</h2>
+                    <button type="button" class="btn-close-telegram" id="closeTelegramBtn">✕</button>
+                </div>
+                
+                <div class="telegram-content">
+                    <!-- TG Prompt Section -->
+                    <div class="telegram-prompt-section">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                            <h3 style="font-size: 1rem; color: var(--text-primary); margin: 0;">Caption Generation Prompt:</h3>
+                            <button type="button" class="btn-recreate-tg" id="recreateTgBtn">
+                                <span class="btn-text">🔄 Recreate TG text</span>
+                                <span class="btn-loader" style="display: none;">
+                                    <span class="spinner-small"></span>
+                                </span>
+                            </button>
+                        </div>
+                        <textarea 
+                            id="tgPrompt" 
+                            class="telegram-prompt-textarea"
+                            placeholder="Prompt for Claude to generate Telegram caption..."
+                            rows="4"
+                        ></textarea>
+                    </div>
+
+                    <!-- TG Caption Section -->
+                    <div class="telegram-caption-section">
+                        <h3 style="font-size: 1rem; margin-bottom: 0.75rem; color: var(--text-primary);">Generated Caption:</h3>
+                        <textarea 
+                            id="tgCaption" 
+                            class="telegram-caption-textarea"
+                            placeholder="Generated caption will appear here..."
+                            rows="6"
+                        ></textarea>
+                    </div>
+                    
+                    <!-- Preview Section -->
+                    <div class="telegram-preview">
+                        <h3 style="font-size: 1rem; margin-bottom: 0.75rem; color: var(--text-primary);">Preview:</h3>
+                        <div class="telegram-preview-card">
+                            <div class="telegram-preview-media" id="telegramPreviewMedia">
+                                <img id="telegramPreviewImage" src="" alt="Preview" style="width: 100%; border-radius: 8px; display: none;">
+                                <video id="telegramPreviewVideo" controls style="width: 100%; border-radius: 8px; display: none;"></video>
+                                <span class="telegram-media-badge" id="telegramMediaBadge"></span>
+                            </div>
+                            <div class="telegram-preview-caption">
+                                <p id="telegramPreviewCaption"></p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="telegram-controls">
+                        <div class="telegram-status" id="telegramStatus">
+                            <span class="status-icon">ℹ️</span>
+                            <span class="status-text">Ready to publish</span>
+                        </div>
+                        
+                        <button type="button" class="btn-publish-telegram" id="publishTelegramBtn">
+                            <span class="btn-text">🚀 Publish to Telegram</span>
+                            <span class="btn-loader" style="display: none;">
+                                <span class="spinner-small"></span> Publishing...
+                            </span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>Powered by Google Nano Banana (Gemini 2.5 Flash) for images, Claude 4.5 Sonnet + Seedance-1-pro for videos via Replicate</p>
+        </footer>
+    </div>
+
+    <!-- Error Toast -->
+    <div id="errorToast" class="toast toast-error" style="display: none;">
+        <div class="toast-content">
+            <span class="toast-icon">⚠️</span>
+            <span class="toast-message"></span>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
+
