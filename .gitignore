@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated content
+main_images/
+generated_images/
+generated_videos/
+generation_history.json
+
+# Temporary files
+*.bak
+*.corrupted.*
+test_server*.py
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Old files (archived)
+_old_*
+
