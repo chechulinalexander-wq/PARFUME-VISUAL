@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh root@84.54.31.86 \"cd /root/PARFUME-VISUAL && pwd && ls -la fix_nginx_on_server.sh\")",
+      "Bash(ssh root@84.54.31.86 \"find /root /opt /home -name ''PARFUME-VISUAL'' -o -name ''perfume-visual'' 2>/dev/null | head -5\")",
+      "Bash(ssh root@84.54.31.86 'pwd')",
+      "Bash(ssh:*)",
+      "Bash(curl -s http://84.54.31.86/api/test)",
+      "Bash(curl -s http://84.54.31.86/api/products)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -242,45 +242,70 @@ rm -f /etc/nginx/sites-enabled/default
 rm -f /etc/nginx/sites-enabled/default.backup
 rm -f /etc/nginx/sites-available/default.backup
 
-cat > /etc/nginx/sites-available/perfume-visual <<EOF
+cat > /etc/nginx/sites-available/perfume-visual <<'EOF'
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
-    
-    server_name $SERVER_IP _;
+
+    server_name 84.54.31.86 _;
 
     client_max_body_size 100M;
     client_body_timeout 300s;
 
-    location / {
+    # Static files (CSS, JS, etc)
+    location /static {
+        alias /opt/perfume-visual/static;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Images - try main_images first, then generated_images
+    location /images {
+        alias /opt/perfume-visual/main_images;
+        try_files $uri @generated_images;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    location @generated_images {
+        alias /opt/perfume-visual/generated_images;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    # Videos
+    location /videos {
+        alias /opt/perfume-visual/generated_videos;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    # API endpoints - proxy to Flask app
+    location /api {
         proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
         # Increased timeouts for AI processing
         proxy_read_timeout 300s;
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
     }
 
-    location /static {
-        alias $APP_DIR/static;
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
+    # Everything else - proxy to Flask app
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
-    location /images {
-        alias $APP_DIR/main_images;
-        expires 7d;
-        add_header Cache-Control "public";
-    }
-
-    location /videos {
-        alias $APP_DIR/generated_videos;
-        expires 7d;
-        add_header Cache-Control "public";
+        # Increased timeouts for AI processing
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
     }
 }
 EOF

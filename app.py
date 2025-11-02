@@ -44,13 +44,21 @@ if REPLICATE_API_TOKEN:
 else:
     print(f"[INIT] WARNING: REPLICATE_API_TOKEN not found in .env!")
 
-UPLOAD_FOLDER = 'generated_images'
-VIDEO_FOLDER = 'generated_videos'
+# Folder configuration - use environment variables or defaults
+MAIN_IMAGES_FOLDER = os.getenv('UPLOAD_FOLDER', 'main_images')
+UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', 'main_images')  # For backwards compatibility
+GENERATED_IMAGES_FOLDER = 'generated_images'
+VIDEO_FOLDER = os.getenv('VIDEO_FOLDER', 'generated_videos')
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'mp4'}
 
 # Ensure folders exist
-Path(UPLOAD_FOLDER).mkdir(exist_ok=True)
+Path(MAIN_IMAGES_FOLDER).mkdir(exist_ok=True)
+Path(GENERATED_IMAGES_FOLDER).mkdir(exist_ok=True)
 Path(VIDEO_FOLDER).mkdir(exist_ok=True)
+
+print(f"[INIT] Main images folder: {MAIN_IMAGES_FOLDER}")
+print(f"[INIT] Generated images folder: {GENERATED_IMAGES_FOLDER}")
+print(f"[INIT] Video folder: {VIDEO_FOLDER}")
 
 # Store generation history
 HISTORY_FILE = 'generation_history.json'
@@ -744,7 +752,7 @@ def generate():
         try:
             nobg_result = remove_background_replicate(original_path)
             nobg_filename = f"{safe_name}_nobg_{timestamp}.png"
-            nobg_path = os.path.join(UPLOAD_FOLDER, nobg_filename)
+            nobg_path = os.path.join(GENERATED_IMAGES_FOLDER, nobg_filename)
             
             if nobg_result != original_path:
                 # Background was removed, save it
@@ -765,7 +773,7 @@ def generate():
         # Step 3: Stylize with Nano Banana (Gemini 2.5 Flash)
         print(f"[3/4] Stylizing with Nano Banana...")
         final_filename = f"{safe_name}_styled_{timestamp}.png"
-        final_path = os.path.join(UPLOAD_FOLDER, final_filename)
+        final_path = os.path.join(GENERATED_IMAGES_FOLDER, final_filename)
         
         try:
             # Stylize with Nano Banana (Gemini 2.5 Flash)
@@ -799,9 +807,33 @@ def generate():
             'final_image': final_filename,
             'status': 'completed'
         }
-        
+
         save_history(generation_entry)
-        
+
+        # Update database with styled image path if product_id is provided
+        product_id = data.get('product_id')
+        if product_id:
+            try:
+                import sqlite3
+                db_path = os.getenv('DB_PATH', 'fragrantica_news.db')
+
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+
+                    cursor.execute('''
+                        UPDATE randewoo_products
+                        SET styled_image_path = ?
+                        WHERE id = ?
+                    ''', (final_filename, product_id))
+
+                    conn.commit()
+                    conn.close()
+
+                    print(f"[DB] Updated styled_image_path for product {product_id}: {final_filename}")
+            except Exception as e:
+                print(f"[DB ERROR] Failed to update styled_image_path: {e}")
+
         return jsonify({
             'success': True,
             'message': 'Image generated successfully',
@@ -857,7 +889,18 @@ def get_history():
 
 @app.route('/images/<path:filename>')
 def serve_image(filename):
-    """Serve generated images"""
+    """Serve images from main_images or generated_images folder"""
+    # Try main_images first (where main product images are stored)
+    main_path = os.path.join(MAIN_IMAGES_FOLDER, filename)
+    if os.path.exists(main_path):
+        return send_from_directory(MAIN_IMAGES_FOLDER, filename)
+
+    # Try generated_images (where styled images are stored)
+    gen_path = os.path.join(GENERATED_IMAGES_FOLDER, filename)
+    if os.path.exists(gen_path):
+        return send_from_directory(GENERATED_IMAGES_FOLDER, filename)
+
+    # Fallback to UPLOAD_FOLDER for backwards compatibility
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route('/api/search-image', methods=['POST'])
@@ -1197,14 +1240,14 @@ def generate_video():
         # Find nobg image (not styled!)
         # Replace _styled with _nobg in filename
         nobg_filename = image_filename.replace('_styled', '_nobg')
-        nobg_path = os.path.join(UPLOAD_FOLDER, nobg_filename)
-        
+        nobg_path = os.path.join(GENERATED_IMAGES_FOLDER, nobg_filename)
+
         # If nobg file doesn't exist, try to find it by pattern
         if not os.path.exists(nobg_path):
             print(f"[VIDEO API] nobg file not found: {nobg_filename}")
             # Try to find any nobg file for this perfume
             import glob
-            nobg_pattern = os.path.join(UPLOAD_FOLDER, f"*nobg*.png")
+            nobg_pattern = os.path.join(GENERATED_IMAGES_FOLDER, f"*nobg*.png")
             nobg_files = sorted(glob.glob(nobg_pattern), key=os.path.getmtime, reverse=True)
             if nobg_files:
                 nobg_path = nobg_files[0]
@@ -1250,9 +1293,33 @@ def generate_video():
         # Save video
         with open(video_path, 'wb') as f:
             f.write(video_data)
-        
+
         print(f"[VIDEO API] ✓ Video generated: {video_filename}")
-        
+
+        # Update database with video path if product_id is provided
+        product_id = data.get('product_id')
+        if product_id:
+            try:
+                import sqlite3
+                db_path = os.getenv('DB_PATH', 'fragrantica_news.db')
+
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+
+                    cursor.execute('''
+                        UPDATE randewoo_products
+                        SET video_path = ?
+                        WHERE id = ?
+                    ''', (video_filename, product_id))
+
+                    conn.commit()
+                    conn.close()
+
+                    print(f"[DB] Updated video_path for product {product_id}: {video_filename}")
+            except Exception as e:
+                print(f"[DB ERROR] Failed to update video_path: {e}")
+
         return jsonify({
             'success': True,
             'message': 'Video generated successfully',
@@ -1288,6 +1355,429 @@ def test():
         'upload_folder': UPLOAD_FOLDER,
         'video_folder': VIDEO_FOLDER
     })
+
+@app.route('/api/products')
+def get_products():
+    """Get all Randewoo products from database"""
+    try:
+        import sqlite3
+
+        db_path = os.getenv('DB_PATH', 'fragrantica_news.db')
+
+        if not os.path.exists(db_path):
+            return jsonify({
+                'success': False,
+                'error': f'Database not found: {db_path}',
+                'products': []
+            })
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row  # Return rows as dictionaries
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT id, brand, name, product_url, fragrantica_url,
+                   description, image_path, styled_image_path, video_path,
+                   parsed_at
+            FROM randewoo_products
+            ORDER BY parsed_at DESC
+        ''')
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Convert to list of dictionaries
+        products = [dict(row) for row in rows]
+
+        return jsonify({
+            'success': True,
+            'products': products,
+            'count': len(products)
+        })
+
+    except Exception as e:
+        print(f"[API ERROR] /api/products: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'products': []
+        }), 500
+
+@app.route('/api/settings/prompts', methods=['GET', 'POST'])
+def manage_prompts():
+    """Get or update global prompts from database"""
+    try:
+        import sqlite3
+
+        db_path = os.getenv('DB_PATH', 'fragrantica_news.db')
+
+        if not os.path.exists(db_path):
+            return jsonify({
+                'success': False,
+                'error': f'Database not found: {db_path}'
+            }), 404
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        if request.method == 'GET':
+            # Get prompts
+            cursor.execute('''
+                SELECT key, value FROM global_settings
+                WHERE key IN ('prompt_stylize', 'prompt_caption')
+            ''')
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            prompts = {}
+            for row in rows:
+                key = row[0].replace('prompt_', '')  # Remove 'prompt_' prefix
+                prompts[key] = row[1]
+
+            return jsonify({
+                'success': True,
+                'prompts': prompts
+            })
+
+        else:  # POST - update prompts
+            data = request.json
+            prompt_stylize = data.get('prompt_stylize', '').strip()
+            prompt_caption = data.get('prompt_caption', '').strip()
+
+            if not prompt_stylize or not prompt_caption:
+                return jsonify({
+                    'success': False,
+                    'error': 'Both prompts are required'
+                }), 400
+
+            # Update prompts
+            from datetime import datetime
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO global_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+            ''', ('prompt_stylize', prompt_stylize, datetime.now()))
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO global_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+            ''', ('prompt_caption', prompt_caption, datetime.now()))
+
+            conn.commit()
+            conn.close()
+
+            return jsonify({
+                'success': True,
+                'message': 'Prompts updated successfully'
+            })
+
+    except Exception as e:
+        print(f"[API ERROR] /api/settings/prompts: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/save-main-image', methods=['POST'])
+def save_main_image():
+    """Download and save main image for a product"""
+    try:
+        import sqlite3
+        from datetime import datetime
+
+        data = request.json
+        image_url = data.get('image_url', '').strip()
+        product_id = data.get('product_id')
+        brand = data.get('brand', '').strip()
+        name = data.get('name', '').strip()
+
+        if not image_url or not product_id:
+            return jsonify({
+                'success': False,
+                'error': 'Image URL and product ID are required'
+            }), 400
+
+        # Generate filename
+        import re
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        safe_brand = re.sub(r'[^\w\s-]', '', brand).strip().replace(' ', '_')
+        safe_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
+        safe_filename = f"{safe_brand}_{safe_name}"[:50]
+        filename = f"{safe_filename}_main_{timestamp}.jpg"
+
+        # Download image
+        main_images_folder = os.getenv('UPLOAD_FOLDER', 'main_images')
+        os.makedirs(main_images_folder, exist_ok=True)
+
+        filepath = download_image(image_url, filename)
+
+        if not filepath:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to download image'
+            }), 500
+
+        # Get just the filename (not full path)
+        image_filename = os.path.basename(filepath)
+
+        # Update database
+        db_path = os.getenv('DB_PATH', 'fragrantica_news.db')
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            UPDATE randewoo_products
+            SET image_path = ?
+            WHERE id = ?
+        ''', (image_filename, product_id))
+
+        conn.commit()
+        conn.close()
+
+        print(f"[SAVE MAIN] Image saved: {image_filename} for product ID {product_id}")
+
+        return jsonify({
+            'success': True,
+            'image_path': image_filename,
+            'message': 'Main image saved successfully'
+        })
+
+    except Exception as e:
+        print(f"[API ERROR] /api/save-main-image: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/generate-tg-caption', methods=['POST'])
+def generate_tg_caption():
+    """Generate Telegram caption using Claude via Replicate"""
+    try:
+        if not REPLICATE_API_TOKEN:
+            return jsonify({
+                'success': False,
+                'error': 'Replicate API not configured'
+            }), 500
+
+        data = request.json
+        brand = data.get('brand', '').strip()
+        perfume_name = data.get('perfume_name', '').strip()
+        description = data.get('description', '').strip()
+        custom_prompt = data.get('prompt', '').strip()
+
+        if not all([brand, perfume_name, description]):
+            return jsonify({
+                'success': False,
+                'error': 'Brand, perfume name, and description are required'
+            }), 400
+
+        # Use custom prompt or default
+        if custom_prompt:
+            prompt = custom_prompt
+        else:
+            prompt = f"""Создай продающий пост для Telegram канала о парфюме {brand} {perfume_name}.
+
+Описание аромата: {description}
+
+Требования:
+- Текст должен быть живым и эмоциональным
+- Вызывать желание купить
+- Подчеркивать уникальность аромата
+- Использовать емодзи (но не переборщить)
+- Длина: 3-5 предложений
+- Стиль: casual, но профессионально
+
+Формат ответа: только текст поста, без заголовков и пояснений."""
+
+        print(f"[TG CAPTION] Generating with Claude for {brand} {perfume_name}...")
+
+        headers = {
+            'Authorization': f'Token {REPLICATE_API_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            'input': {
+                'prompt': prompt,
+                'max_tokens': 1024
+            }
+        }
+
+        # Create prediction
+        response = requests.post(
+            'https://api.replicate.com/v1/models/anthropic/claude-4.5-sonnet/predictions',
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+
+        if response.status_code != 201:
+            print(f"[TG CAPTION ERROR] Failed to create prediction: {response.status_code}")
+            print(f"[TG CAPTION ERROR] Response: {response.text}")
+            return jsonify({
+                'success': False,
+                'error': f'Failed to call Claude API: {response.status_code}'
+            }), 500
+
+        prediction = response.json()
+        prediction_id = prediction['id']
+        print(f"[TG CAPTION] Prediction created: {prediction_id}")
+
+        # Poll for result
+        max_attempts = 60
+        for attempt in range(max_attempts):
+            time.sleep(2)
+
+            response = requests.get(
+                f'https://api.replicate.com/v1/predictions/{prediction_id}',
+                headers=headers,
+                timeout=30
+            )
+
+            prediction = response.json()
+            status = prediction['status']
+
+            if status == 'succeeded':
+                output = prediction['output']
+                caption = ''.join(output) if isinstance(output, list) else str(output)
+
+                print(f"[TG CAPTION] ✓ Generated: {caption[:100]}...")
+
+                return jsonify({
+                    'success': True,
+                    'caption': caption.strip()
+                })
+
+            elif status == 'failed':
+                error_msg = prediction.get('error', 'Unknown error')
+                print(f"[TG CAPTION ERROR] Prediction failed: {error_msg}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Caption generation failed: {error_msg}'
+                }), 500
+
+        print(f"[TG CAPTION ERROR] Timeout waiting for result")
+        return jsonify({
+            'success': False,
+            'error': 'Timeout waiting for caption generation'
+        }), 500
+
+    except Exception as e:
+        print(f"[API ERROR] /api/generate-tg-caption: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/publish-to-telegram', methods=['POST'])
+def publish_to_telegram():
+    """Publish image/video to Telegram channel"""
+    try:
+        import sqlite3
+
+        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+        TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
+
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
+            return jsonify({
+                'success': False,
+                'error': 'Telegram bot token or channel ID not configured in .env'
+            }), 500
+
+        data = request.json
+        brand = data.get('brand', '').strip()
+        perfume_name = data.get('perfume_name', '').strip()
+        caption = data.get('caption', '').strip()
+        media_file = data.get('media_file', '').strip()
+        media_type = data.get('media_type', 'image')  # 'image' or 'video'
+        product_url = data.get('product_url', '').strip()
+
+        if not all([brand, perfume_name, caption, media_file]):
+            return jsonify({
+                'success': False,
+                'error': 'Brand, perfume name, caption, and media file are required'
+            }), 400
+
+        # Add product link button if available
+        reply_markup = None
+        if product_url:
+            reply_markup = {
+                'inline_keyboard': [[
+                    {'text': '🛒 Купить на Randewoo', 'url': product_url}
+                ]]
+            }
+
+        # Determine file path
+        if media_type == 'video':
+            file_path = os.path.join(VIDEO_FOLDER, media_file)
+        else:
+            file_path = os.path.join(UPLOAD_FOLDER, media_file)
+
+        if not os.path.exists(file_path):
+            return jsonify({
+                'success': False,
+                'error': f'Media file not found: {media_file}'
+            }), 404
+
+        print(f"[TELEGRAM] Publishing {media_type} to channel {TELEGRAM_CHANNEL_ID}...")
+        print(f"[TELEGRAM] File: {file_path}")
+
+        # Send to Telegram
+        url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}'
+
+        if media_type == 'video':
+            endpoint = f'{url}/sendVideo'
+            files = {'video': open(file_path, 'rb')}
+        else:
+            endpoint = f'{url}/sendPhoto'
+            files = {'photo': open(file_path, 'rb')}
+
+        payload = {
+            'chat_id': TELEGRAM_CHANNEL_ID,
+            'caption': caption,
+            'parse_mode': 'HTML'
+        }
+
+        if reply_markup:
+            payload['reply_markup'] = json.dumps(reply_markup)
+
+        response = requests.post(endpoint, data=payload, files=files, timeout=60)
+
+        if response.status_code == 200:
+            result = response.json()
+            print(f"[TELEGRAM] ✓ Published successfully!")
+
+            return jsonify({
+                'success': True,
+                'message': 'Published to Telegram successfully',
+                'telegram_response': result
+            })
+        else:
+            error_msg = response.text
+            print(f"[TELEGRAM ERROR] Failed to publish: {response.status_code}")
+            print(f"[TELEGRAM ERROR] Response: {error_msg}")
+            return jsonify({
+                'success': False,
+                'error': f'Telegram API error: {error_msg}'
+            }), 500
+
+    except Exception as e:
+        print(f"[API ERROR] /api/publish-to-telegram: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 if __name__ == '__main__':
     PORT = 8080
