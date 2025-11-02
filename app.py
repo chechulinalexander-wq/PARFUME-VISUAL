@@ -678,22 +678,23 @@ def generate():
         perfume_name = data.get('perfume_name', '').strip()
         description = data.get('description', '').strip()
         image_url = data.get('image_url', '').strip()
-        
+        image_path = data.get('image_path', '').strip()  # From database (already saved locally)
+
         # Get custom prompts or use defaults
         prompt_background = data.get('prompt_background', '').strip()
         prompt_stylize = data.get('prompt_stylize', '').strip()
-        
+
         print(f"[PROMPTS] Background prompt received: {len(prompt_background)} chars")
         print(f"[PROMPTS] Stylize prompt received: {len(prompt_stylize)} chars")
         if prompt_background:
             print(f"[PROMPTS] Background: {prompt_background[:100]}...")
         if prompt_stylize:
             print(f"[PROMPTS] Stylize: {prompt_stylize[:100]}...")
-        
+
         # Validation
         if not all([brand, perfume_name, description]):
             return jsonify({'error': 'All fields are required'}), 400
-        
+
         # Generate unique filename (sanitize for filesystem)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         # Remove special characters that can cause issues
@@ -702,9 +703,16 @@ def generate():
         safe_perfume = re.sub(r'[^\w\s-]', '', perfume_name).strip().replace(' ', '_')
         safe_name = f"{safe_brand}_{safe_perfume}"[:50]
         print(f"[FILENAME] Sanitized: '{brand} {perfume_name}' -> '{safe_name}'")
-        
+
         # Step 1: Get image
-        if image_url:
+        if image_path:
+            # Use existing image from database (already downloaded)
+            print(f"[1/4] Using existing image from database: {image_path}")
+            original_path = os.path.join(MAIN_IMAGES_FOLDER, image_path)
+            if not os.path.exists(original_path):
+                return jsonify({'error': f'Image file not found: {image_path}'}), 400
+            original_filename = image_path
+        elif image_url:
             print(f"[1/4] Downloading image from URL...")
             original_filename = f"{safe_name}_original_{timestamp}.jpg"
             original_path = download_image(image_url, original_filename)
